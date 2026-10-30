@@ -17,6 +17,11 @@ else
     content_server=$content_server'    location @app {\n'
     content_server=$content_server'        include uwsgi_params;\n'
     content_server=$content_server'        uwsgi_pass unix:///tmp/uwsgi.sock;\n'
+    content_server=$content_server'        uwsgi_buffering off;\n'
+    content_server=$content_server'        uwsgi_request_buffering off;\n'
+    content_server=$content_server'        uwsgi_read_timeout 3600s;\n'
+    content_server=$content_server'        uwsgi_send_timeout 3600s;\n'
+    content_server=$content_server'        uwsgi_connect_timeout 60s;\n'
     content_server=$content_server'    }\n'
     content_server=$content_server'}\n'
     # Save generated server /etc/nginx/conf.d/nginx.conf

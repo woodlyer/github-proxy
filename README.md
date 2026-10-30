@@ -91,6 +91,104 @@ python版本的机器如果无法正常访问github.io会启动报错，请自�
 
 python版本默认走服务器（2021.3.27更新）
 
+---
+
+## ⚡ 性能调优与 1核1GB 小鸡极轻量/安全部署指南
+
+在 1核 1GB 内存的低配云服务器（小鸡）上代理大文件（如 HuggingFace 模型权重、GitHub Releases）时，必须针对**内存、磁盘与安全**进行专门优化，否则极易导致 **OOM 崩机、磁盘写满或被他人扫到蹭光流量**。
+
+---
+
+### 1. 彻底关闭磁盘缓冲（核心：0 磁盘写盘，纯内存流式直推）
+
+> **⚠️ 为什么必须关闭缓冲**：  
+> Nginx 代理 uWSGI/HTTP 时默认开启缓冲（`uwsgi_buffering on;` 或 `proxy_buffering on;`）。当上游下载速度大于本地接收速度时，Nginx 会将几十 GB 的数据先写入 VPS 本地磁盘（`/var/lib/nginx/tmp/`），不仅 100% 刷爆小鸡硬盘，还会导致极高的磁盘 IO 卡死整机。
+
+在 Nginx 的反代配置中加入以下指令，开启**零拷贝实时内存直推**：
+
+```nginx
+# 1. 纯内存直推与防超时配置（根据你的部署方式二选一）
+
+# 方式 A：如果使用 uwsgi_pass（如官方 Docker 镜像内部）
+location / {
+    include uwsgi_params;
+    uwsgi_pass unix:///tmp/uwsgi.sock;  # 或 127.0.0.1:81;
+    
+    # 核心：彻底关闭缓冲，数据 0 磁盘落地，纯内存流式传输
+    uwsgi_buffering off;
+    uwsgi_request_buffering off;
+
+    # 调大长连接超时（防止数十GB大文件下载因超时断开）
+    uwsgi_read_timeout 3600s;
+    uwsgi_send_timeout 3600s;
+    uwsgi_connect_timeout 60s;
+    
+    # 透传 Range 报头，确保多线程断点续传生效
+    uwsgi_pass_request_headers on;
+}
+
+# 方式 B：如果使用宿主机 Nginx 纯 HTTP 反代容器（proxy_pass）
+location / {
+    proxy_pass http://127.0.0.1:8080;
+    
+    # 核心：关闭磁盘临时缓冲
+    proxy_buffering off;
+    proxy_request_buffering off;
+    
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_connect_timeout 60s;
+    
+    # 关闭 access 日志，消除海量分块请求的高频磁盘写盘
+    access_log off;
+}
+```
+
+---
+
+### 2. 针对 1核 1GB 内存小鸡的极轻量并发配置（`app/uwsgi.ini`）
+
+> **⚠️ 为什么小鸡绝不能开多进程/重度多线程**：  
+> Python Flask 每个进程基础占用约 40~60MB 内存。如果配置 4 个进程 8 个线程，加上 Linux 系统本身和 Nginx，内存会直接突破 800MB+，导致系统触发 Linux OOM Killer 杀掉 Python 容器导致经常掉线。  
+> **1核 1GB 的最佳方案是：1 个单进程 + 2 个轻量线程**。
+
+修改 `app/uwsgi.ini`：
+
+```ini
+[uwsgi]
+module = main
+callable = app
+master = true
+
+# 单核小鸡专属：1个 worker 进程配合 2 个轻量线程
+# 总内存占用死死控制在 50MB 左右，CPU 占用极低
+processes = 1
+threads = 2
+
+# 关键防崩保护：单 worker 物理内存超过 200MB 时自动优雅回收，杜绝大文件传输潜在的内存泄漏
+reload-on-rss = 200
+
+# 缓冲区与超时
+buffer-size = 32768
+harakiri = 3600
+socket-timeout = 600
+```
+
+---
+
+### 3. Python 后端（`app/main.py`）优化与修复
+
+1. **分块大小（`CHUNK_SIZE`）**：
+   - 设为 `64 KB`（`64 * 1024`）。每个连接在内存中仅占 64KB 缓冲，既保证满速带宽吞吐，又不会撑爆小鸡的 1GB 内存。
+2. **修复重定向 500/502 报错（如 HuggingFace 等）**：
+   - 上游（如 HuggingFace、GitHub CDN）返回相对路径重定向（如 `/api/resolve-cache/...`）时，使用 `urljoin` 自动补全协议头，避免 requests 抛出 `MissingSchema` 崩溃。
+3. **剔除逐跳请求头**：
+   - 自动过滤 `Transfer-Encoding`, `Connection`, `Keep-Alive`，避免与 Nginx 反向代理协议报头冲突。
+4. **修复 Query 参数拼接**：
+   - 使用标准 `request.query_string` 拼接，避免在经过 Nginx 反向代理 SSL 终结后 `request.base_url` 替换异常导致 URL 重复。
+
+---
+
 ## Cloudflare Workers计费
 
 到 `overview` 页面可参看使用情况。免费版每天有 10 万次免费请求，并且有每分钟1000次请求的限制。

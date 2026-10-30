@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
+import os
 import re
+from urllib.parse import urljoin
 
 import requests
 from flask import Flask, Response, redirect, request
@@ -40,9 +42,17 @@ white_list = [tuple([x.replace(' ', '') for x in i.split('/')]) for i in white_l
 black_list = [tuple([x.replace(' ', '') for x in i.split('/')]) for i in black_list.split('\n') if i]
 pass_list = [tuple([x.replace(' ', '') for x in i.split('/')]) for i in pass_list.split('\n') if i]
 app = Flask(__name__)
-CHUNK_SIZE = 1024 * 10
-index_html = requests.get(ASSET_URL, timeout=10).text
-icon_r = requests.get(ASSET_URL + '/favicon.ico', timeout=10).content
+
+# 单核 1GB 内存 VPS 小鸡流式传输分块：默认 64KB，兼顾速度与极低内存占用
+CHUNK_SIZE = int(os.environ.get('CHUNK_SIZE', 1024 * 64))
+
+try:
+    index_html = requests.get(ASSET_URL, timeout=10).text
+    icon_r = requests.get(ASSET_URL + '/favicon.ico', timeout=10).content
+except Exception:
+    index_html = "gh-proxy is running"
+    icon_r = b""
+
 exp1 = re.compile(r'^(?:https?://)?github\.com/(?P<author>.+?)/(?P<repo>.+?)/(?:releases|archive)/.*$')
 exp2 = re.compile(r'^(?:https?://)?github\.com/(?P<author>.+?)/(?P<repo>.+?)/(?:blob|raw)/.*$')
 exp3 = re.compile(r'^(?:https?://)?github\.com/(?P<author>.+?)/(?P<repo>.+?)/(?:info|git-).*$')
@@ -166,14 +176,32 @@ def proxy(u, allow_redirects=False):
     if 'Host' in r_headers:
         r_headers.pop('Host')
     try:
-        url = u + request.url.replace(request.base_url, '', 1)
+        # 拼接 Query String，避免 base_url 替换失效问题
+        if request.query_string:
+            qs = request.query_string.decode('utf-8', errors='ignore')
+            url = u + ('&' if '?' in u else '?') + qs
+        else:
+            url = u
+
         if url.startswith('https:/') and not url.startswith('https://'):
             url = 'https://' + url[7:]
-        r = requests.request(method=request.method, url=url, data=request.data, headers=r_headers, stream=True, allow_redirects=allow_redirects)
+
+        r = requests.request(
+            method=request.method,
+            url=url,
+            data=request.get_data(),
+            headers=r_headers,
+            stream=True,
+            allow_redirects=allow_redirects
+        )
         headers = dict(r.headers)
 
+        # 剔除逐跳头部，防止与反向代理和 HTTP/2 协议冲突
+        for h in ['Transfer-Encoding', 'Content-Encoding', 'Connection', 'Keep-Alive', 'Upgrade']:
+            headers.pop(h, None)
+
         if 'Content-length' in r.headers and int(r.headers['Content-length']) > size_limit:
-            return redirect(u + request.url.replace(request.base_url, '', 1))
+            return redirect(url)
 
         def generate():
             for chunk in iter_content(r, chunk_size=CHUNK_SIZE):
@@ -181,6 +209,8 @@ def proxy(u, allow_redirects=False):
 
         if 'Location' in r.headers:
             _location = r.headers.get('Location')
+            # 兼容相对路径跳转（如 HuggingFace 等 CDN），使用 urljoin 补齐绝对地址
+            _location = urljoin(url, _location)
             if check_url(_location):
                 headers['Location'] = '/' + _location
             else:
@@ -190,6 +220,7 @@ def proxy(u, allow_redirects=False):
     except Exception as e:
         headers['content-type'] = 'text/html; charset=UTF-8'
         return Response('server error ' + str(e), status=500, headers=headers)
+
 
 app.debug = True
 if __name__ == '__main__':
