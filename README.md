@@ -112,7 +112,7 @@ python版本默认走服务器（2021.3.27更新）
 # 方式 A：如果使用 uwsgi_pass（如官方 Docker 镜像内部）
 location / {
     include uwsgi_params;
-    uwsgi_pass unix:///tmp/uwsgi.sock;  # 或 127.0.0.1:81;
+    uwsgi_pass unix:///tmp/uwsgi.sock;  # 或 127.0.0.1:8001;
     
     # 核心：彻底关闭缓冲，数据 0 磁盘落地，纯内存流式传输
     uwsgi_buffering off;
