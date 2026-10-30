@@ -128,10 +128,9 @@ def check_url(u):
 def handler(u):
     u = u if u.startswith('http') else 'https://' + u
     if u.rfind('://', 3, 9) == -1:
-        u = u.replace('s:/', 's://', 1)  # uwsgi会将//传递为/
+        u = u.replace('s:/', 's://', 1).replace('p:/', 'p://', 1)  # uwsgi会将//传递为/
+    return proxy(u, allow_redirects=True)
     pass_by = False
-    return proxy(u)
-    # return 
     m = check_url(u)
     if m:
         m = tuple(m.groups())
@@ -170,7 +169,7 @@ def handler(u):
         return proxy(u)
 
 
-def proxy(u, allow_redirects=False):
+def proxy(u, allow_redirects=True):
     headers = {}
     r_headers = dict(request.headers)
     if 'Host' in r_headers:
@@ -185,6 +184,8 @@ def proxy(u, allow_redirects=False):
 
         if url.startswith('https:/') and not url.startswith('https://'):
             url = 'https://' + url[7:]
+        elif url.startswith('http:/') and not url.startswith('http://'):
+            url = 'http://' + url[6:]
 
         r = requests.request(
             method=request.method,
@@ -211,10 +212,7 @@ def proxy(u, allow_redirects=False):
             _location = r.headers.get('Location')
             # 兼容相对路径跳转（如 HuggingFace 等 CDN），使用 urljoin 补齐绝对地址
             _location = urljoin(url, _location)
-            if check_url(_location):
-                headers['Location'] = '/' + _location
-            else:
-                return proxy(_location, True)
+            headers['Location'] = '/' + _location
 
         return Response(generate(), headers=headers, status=r.status_code)
     except Exception as e:
