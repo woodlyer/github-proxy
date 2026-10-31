@@ -129,7 +129,10 @@ def handler(u):
     u = u if u.startswith('http') else 'https://' + u
     if u.rfind('://', 3, 9) == -1:
         u = u.replace('s:/', 's://', 1).replace('p:/', 'p://', 1)  # uwsgi会将//传递为/
-    return proxy(u, allow_redirects=True)
+    # allow_redirects=False: 对于大文件下载跳转（如 HuggingFace 跳转到 AWS CloudFront CDN），
+    # 直接向客户端返回 302 重定向，由客户端直接连接 CDN 下载，
+    # 避免 VPS 作为中继传输几十 GB 流量导致流量耗尽和小鸡 CPU/网卡打爆。
+    return proxy(u, allow_redirects=False)
     pass_by = False
     m = check_url(u)
     if m:
