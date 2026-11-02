@@ -215,7 +215,22 @@ def proxy(u, allow_redirects=True):
             _location = r.headers.get('Location')
             # 兼容相对路径跳转（如 HuggingFace 等 CDN），使用 urljoin 补齐绝对地址
             _location = urljoin(url, _location)
-            headers['Location'] = '/' + _location
+            
+            # 智能分流判断：
+            # 1. 国内可直连的 CDN（如 HuggingFace 的 AWS CloudFront 边缘加速地址）：
+            #    直接下发原始绝对地址，让客户端直连 CDN 下载，彻底避免 VPS 作为中继耗尽流量与带宽
+            # 2. 国内受阻/被墙的目标（如 GitHub Release 的 release-assets.githubusercontent.com）：
+            #    拼接代理路径前缀 '/'，让客户端继续通过本代理翻墙下载
+            direct_cdn_keywords = [
+                'cas-bridge.xethub.hf.co',
+                'cdn-lfs.hf.co',
+                'us.aws.cdn.hf.co',
+                'cloudfront.net'
+            ]
+            if any(k in _location for k in direct_cdn_keywords):
+                headers['Location'] = _location
+            else:
+                headers['Location'] = '/' + _location
 
         return Response(generate(), headers=headers, status=r.status_code)
     except Exception as e:

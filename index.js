@@ -159,9 +159,13 @@ async function proxy(urlObj, reqInit) {
 
     if (resHdrNew.has('location')) {
         let _location = resHdrNew.get('location')
-        if (checkUrl(_location))
+        const directCdns = ['cas-bridge.xethub.hf.co', 'cdn-lfs.hf.co', 'us.aws.cdn.hf.co', 'cloudfront.net']
+        if (directCdns.some(d => _location.includes(d))) {
+            // 国内可直连的 CDN（如 HuggingFace AWS CloudFront）：原样返回绝对地址让客户端直连下载，节省 Worker 流量
+            resHdrNew.set('location', _location)
+        } else if (checkUrl(_location)) {
             resHdrNew.set('location', PREFIX + _location)
-        else {
+        } else {
             reqInit.redirect = 'follow'
             return proxy(newUrl(_location), reqInit)
         }
